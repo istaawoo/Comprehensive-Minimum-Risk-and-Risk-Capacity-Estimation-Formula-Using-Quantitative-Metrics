@@ -10,6 +10,7 @@ Mapping functions are top-level and have docstrings to support unit tests.
 """
 
 from typing import Dict
+import hashlib
 import streamlit as st
 import pandas as pd
 
@@ -205,18 +206,20 @@ def main():
         st.header("Inputs")
         st.caption("Provide client financials and demographics. Negative values are coerced to 0.")
 
-        age = st.number_input("Age (years)", min_value=0, value=38, step=1, help="Client age in years (int).")
+        # Use integer inputs for USD values so cents are not shown.
+        age = st.number_input("Age (years)", min_value=0, value=39, step=1, help="Client age in years (int).")
         dependents = st.number_input("Number of dependents", min_value=0, value=2, step=1, help="Count of dependents (int).")
-        annual_income = st.number_input("Annual income (USD)", min_value=0.0, value=500000.00, step=1000.0, help="Gross annual income (float).")
-        annual_fixed = st.number_input("Annual fixed expenses (USD)", min_value=0.0, value=30000.00, step=500.0, help="Essential fixed expenses per year (float).")
-        annual_variable = st.number_input("Annual variable expenses (USD)", min_value=0.0, value=30000.00, step=500.0, help="Variable expenses per year (float).")
+        annual_income = st.number_input("Annual income (USD)", min_value=0, value=500000, step=500, format="%d", help="Gross annual income. No cents shown.")
+        annual_fixed = st.number_input("Annual fixed expenses (USD)", min_value=0, value=30000, step=500, format="%d", help="Essential fixed expenses per year. No cents shown.")
+        annual_variable = st.number_input("Annual variable expenses (USD)", min_value=0, value=30000, step=500, format="%d", help="Variable expenses per year. No cents shown.")
         industry = st.selectbox("Industry stability", ["Stable", "Moderate", "Unstable"], index=1, help="Select industry stability (dropdown).")
-        expected_growth = st.number_input("Expected salary growth (annual %)", value=2.0, help="Expected yearly salary growth percentage (float).")
-        investable_assets = st.number_input("Investable assets (USD)", min_value=0.0, value=500000.00, step=1000.0, help="Liquid investable assets (float).")
-        annual_withdrawals = st.number_input("Annual withdrawals (USD)", min_value=0.0, value=10000.00, step=500.0, help="Planned yearly withdrawals from portfolio (float).")
+        # Growth step increased to 0.1 for coarser increments (per request)
+        expected_growth = st.number_input("Expected salary growth (annual %)", value=2.0, step=0.1, format="%.1f", help="Expected yearly salary growth percentage (float).")
+        investable_assets = st.number_input("Investable assets (USD)", min_value=0, value=500000, step=10000, format="%d", help="Liquid investable assets. Step 10,000.")
+        annual_withdrawals = st.number_input("Annual withdrawals (USD)", min_value=0, value=10000, step=100, format="%d", help="Planned yearly withdrawals from portfolio. Step 100.")
 
         # Input validation notices
-        if annual_withdrawals == 0.0:
+        if annual_withdrawals == 0:
             st.warning("Annual withdrawals = 0. Using 1 as safe fallback for SLI calculation; consider entering expected withdrawals.")
         # No negative possible because min_value set to 0 above.
 
@@ -238,11 +241,38 @@ def main():
             "Dependents": map_dependents(int(dependents)),
         }
 
-        score = compute_risk_capacity(subscores)
+        # Recalculation control: detect input changes using a simple hash of inputs
+        inputs_tuple = (int(age), int(dependents), int(annual_income), int(annual_fixed), int(annual_variable), industry, float(expected_growth), int(investable_assets), int(annual_withdrawals))
+        inputs_hash = hashlib.sha256(str(inputs_tuple).encode()).hexdigest()
+        last_hash = st.session_state.get("inputs_hash", None)
+        recalc_pressed = st.button("Recalculate")
 
-        # Metric with color logic (Streamlit doesn't let us set color directly on metric,
-        # but we add guiding text and use info/warning where appropriate)
-        st.metric(label="Risk Capacity Score", value=f"{score} / 100")
+        # Recompute if inputs changed since last render or if the user explicitly pressed Recalculate
+        need_recompute = (last_hash != inputs_hash) or recalc_pressed
+        if need_recompute:
+            st.session_state["inputs_hash"] = inputs_hash
+            score = compute_risk_capacity(subscores)
+            st.session_state["last_score"] = score
+            st.success("Score updated")
+        else:
+            score = st.session_state.get("last_score", compute_risk_capacity(subscores))
+
+        # Apply a small stylesheet for requested color scheme (gray background, green accent)
+        st.markdown(
+            """
+            <style>
+            .reportview-container {background: #f4f4f4}
+            .stApp {background: #f4f4f4}
+            .rc-score {font-size:40px; font-weight:700; color: #129742}
+            .rc-sub {color: #333333}
+            .rc-card {background: white; padding: 12px; border-radius: 8px}
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        # Large colored score display using the requested green
+        st.markdown(f"<div class='rc-card'><div class='rc-score'>{score} / 100</div></div>", unsafe_allow_html=True)
 
         # Equity band mapping
         if score < 30:
@@ -258,12 +288,23 @@ def main():
         st.subheader("Recommended equity exposure")
         st.info(band)
 
-        # Score breakdown expander
+        # Score breakdown: clean table presentation
         with st.expander("Score breakdown (subscores, mapping, weights)"):
-            st.write("Subscores and weights (exact):")
+            mapping_text = {
+                "SLI": "piecewise: <=1->0; 1-5->1-40; 5-20->40-80; >20->80-100",
+                "Income": "ratio income/(fixed+variable): <=1->10; 1-1.5->10-40; 1.5-2.5->40-75; >2.5->75-100",
+                "Expenses": "emergency months: <=1->5; 1-3->20-40; 3-6->40-70; >6->70-100",
+                "Industry": "Stable->90; Moderate->60; Unstable->25",
+                "Age": "<=30->90;31-40->75;41-55->50;56-65->30;>65->10",
+                "Growth": "g<0->10;0-2->30;2-5->60;>5->85",
+                "Dependents": "0->90;1->70;2->50;3->30;4+->15",
+            }
+            rows = []
             for k, v in subscores.items():
-                st.write(f"- {k}: {v:.1f}  (weight {WEIGHTS[k]:.0f})")
-            st.write("Mapping logic: see each mapping function's docstring in code for exact piecewise rules.")
+                rows.append({"Component": k, "Subscore": round(v,1), "Weight": int(WEIGHTS[k]), "Mapping": mapping_text.get(k, "")})
+            df_break = pd.DataFrame(rows)
+            st.table(df_break)
+            st.markdown("Mapping logic shown above; exact piecewise rules are implemented in the mapping functions.")
 
         # Assumptions & Confidence
         with st.expander("Assumptions & Confidence"):
