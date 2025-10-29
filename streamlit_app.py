@@ -1,5 +1,5 @@
 """
-app.py — Dark theme, UX polish
+app.py — Dark theme, UX polish + long methodology + weight ranking + disclaimer
 Run with:
     streamlit run app.py
 """
@@ -9,7 +9,7 @@ import streamlit as st
 import pandas as pd
 
 # -----------------------
-# Simple config
+# Config (step sizes)
 # -----------------------
 STEP_INVESTABLE = 2500
 STEP_INCOME = 1000
@@ -19,7 +19,7 @@ STEP_WITHDRAW = 100
 STEP_GROWTH = 0.1
 
 # -----------------------
-# Mapping functions (unchanged logic, cleaned)
+# Mapping functions (same deterministic logic as before)
 # -----------------------
 def map_sli(sli: float) -> float:
     if sli <= 1.0:
@@ -104,137 +104,106 @@ WEIGHTS = {
 }
 
 def compute_risk_capacity(subscores: Dict[str, float]) -> float:
-    missing = [k for k in WEIGHTS.keys() if k not in subscores]
-    if missing:
-        raise ValueError(f"Missing subscores: {missing}")
     total = sum(WEIGHTS[k] * float(subscores[k]) for k in WEIGHTS.keys())
     score = total / 100.0
     return round(max(0.0, min(100.0, score)), 1)
 
 # -----------------------
-# Helpers: formatting + human explanations
+# Helpers (formatting + human lines)
 # -----------------------
 def fmt_num(x: float) -> str:
-    # show integer when whole, else one decimal
     if abs(x - round(x)) < 1e-9:
         return str(int(round(x)))
     return f"{round(x,1):.1f}".rstrip('0').rstrip('.')
 
-def zone_sentence(component: str, raw_value: float, subscore: float) -> str:
-    # human-friendly one-line explanation for the specific input instance
+def zone_sentence(component: str, raw_value: float) -> str:
     if component == "SLI":
         if raw_value <= 1:
-            zone = "No liquid cushion"
+            zone = "No meaningful liquid cushion (≤1 year)."
         elif raw_value <= 5:
-            zone = "Low cushion"
+            zone = "Low cushion (1–5 years)."
         elif raw_value <= 20:
-            zone = "Moderate cushion"
+            zone = "Moderate cushion (5–20 years)."
         else:
-            zone = "Very strong cushion"
-        return f"SLI = {fmt_num(raw_value)} years → {zone}. More years means more downside resilience."
+            zone = "Very strong cushion (>20 years)."
+        return f"SLI = {fmt_num(raw_value)} years — {zone} Larger SLI => stronger resilience to withdrawals/immediate shocks."
     if component == "Income":
         r = raw_value
         if r <= 1:
-            zone = "Income covers ≤ expenses"
+            z = "Income ≤ expenses (high risk of forced selling)."
         elif r <= 1.5:
-            zone = "Income modestly above expenses"
+            z = "Income modestly above expenses."
         elif r <= 2.5:
-            zone = "Income comfortably above expenses"
+            z = "Income comfortably above expenses."
         else:
-            zone = "High income relative to expenses"
-        return f"Income ratio = {round(r,2)} → {zone}. Larger ratio reduces forced-selling risk."
+            z = "High income vs expenses (strong buffer)."
+        return f"Income ratio = {round(r,2)} — {z} Higher ratio reduces selling pressure during downturns."
     if component == "Expenses":
         m = raw_value
         if m <= 1:
-            zone = "Under 1 month emergency cushion"
+            z = "Under 1 month emergency cushion."
         elif m <= 3:
-            zone = "1–3 months emergency cushion"
+            z = "1–3 months."
         elif m <= 6:
-            zone = "3–6 months emergency cushion"
+            z = "3–6 months."
         else:
-            zone = "6+ months emergency cushion"
-        return f"Emergency months = {fmt_num(m)} → {zone}. Larger cushion improves short-term stability."
+            z = "6+ months."
+        return f"Emergency months = {fmt_num(m)} — {z} Bigger cushion improves short-term survival without liquidating assets."
     if component == "Industry":
-        return f"Industry stability labeled '{raw_value}'. Stable industries imply lower job/income disruption risk."
+        return f"Industry stability = {raw_value}. Stable industries imply reduced income-disruption risk."
     if component == "Age":
-        return f"Age = {int(raw_value)}. Younger investors usually have longer recovery horizon after losses."
+        return f"Age = {int(raw_value)}. Younger investors have longer recovery horizons (higher capacity for growth risk)."
     if component == "Growth":
-        return f"Expected salary growth = {fmt_num(raw_value)}% per year → implies future capacity to save/invest."
+        return f"Expected salary growth = {fmt_num(raw_value)}% p.a. Higher growth increases future capacity to bear risk."
     if component == "Dependents":
-        return f"{int(raw_value)} dependents → higher obligations reduce disposable capacity."
+        return f"Dependents = {int(raw_value)}. More dependents reduce discretionary capacity and increase required safety."
     return ""
 
 # -----------------------
-# UI
+# UI + CSS
 # -----------------------
-PAGE_TITLE = "Risk Capacity Estimator"
-PAGE_SUB = "Objective estimate (0–100) of how much investment risk a client can afford financially."
-
 def main():
-    st.set_page_config(page_title=PAGE_TITLE, layout="wide")
-    # ---- dark theme CSS ----
+    st.set_page_config(page_title="Risk Capacity Estimator", layout="wide")
+    # CSS: dark theme, readable selects/inputs, compact widths
     st.markdown(
         """
         <style>
         :root {
-            --accent: #12c755;       /* vibrant green */
-            --dark-bg: #071026;     /* very dark blue/near-black */
-            --card: #0b1b2b;        /* slightly lighter dark card */
-            --muted: #93a4b6;       /* muted text */
-            --text: #e6eef6;        /* main text */
+            --accent: #12c755;
+            --dark-bg: #071026;
+            --card: #0b1b2b;
+            --muted: #93a4b6;
+            --text: #e6eef6;
         }
-        html, body, .stApp {
-            background: var(--dark-bg) !important;
-            color: var(--text) !important;
-        }
-        .stSidebar, .css-1d391kg { background: var(--dark-bg) !important; }
-        .rc-card {
-            background: var(--card);
-            padding: 16px;
-            border-radius: 12px;
-            box-shadow: 0 6px 20px rgba(0,0,0,0.6);
-            color: var(--text) !important;
-        }
-        .rc-score { font-size: 38px; font-weight:700; color: var(--accent); }
-        h1, h2, h3, label, .stCaption, .stText, .stMarkdown {
-            color: var(--text) !important;
-        }
-        /* Inputs styling (force readable inputs on dark) */
-        input, select, textarea {
-            background: #0f2a3f !important;
-            color: var(--text) !important;
-            border-radius: 6px !important;
-            border: 1px solid rgba(255,255,255,0.06) !important;
-        }
-        /* Buttons */
-        .stButton>button, .stDownloadButton>button {
-            background: var(--accent) !important;
-            color: #031014 !important;
-            font-weight: 600;
-            border-radius: 8px !important;
-            padding: 8px 12px !important;
-        }
-        /* Table text */
-        .stTable td, .stTable th { color: var(--text) !important; }
-        /* make the small captions easier to see */
+        html, body, .stApp { background: var(--dark-bg) !important; color: var(--text) !important; }
+        .stSidebar { background: var(--dark-bg) !important; color: var(--text) !important; }
+        .rc-card { background: var(--card); padding: 14px; border-radius: 10px; color: var(--text);}
+        .rc-score { font-size:36px; font-weight:700; color: var(--accent); }
+        input, select, textarea { background: #0f2a3f !important; color: var(--text) !important; border-radius:6px !important; border:1px solid rgba(255,255,255,0.06) !important; padding:6px !important; }
+        .stButton>button, .stDownloadButton>button { background: var(--accent) !important; color: #031014 !important; font-weight:600; border-radius:8px !important; padding:8px 12px !important; }
+        /* limit input widths so there's not a huge empty trailing space */
+        .stNumberInput, .stSelectbox { max-width: 320px; }
+        /* make dataframe columns readable and avoid vertical letter-wrapping */
+        .stDataFrame table { table-layout: auto !important; }
+        /* small caption color */
         .stCaption { color: var(--muted) !important; }
         </style>
         """, unsafe_allow_html=True
     )
 
-    # Title & subtitle (consumer-facing)
-    st.title(PAGE_TITLE)
-    st.write(PAGE_SUB)
+    st.title("Risk Capacity Estimator")
+    st.write("Objective estimate (0–100) of how much investment risk a client can afford financially.")
 
-    left, right = st.columns([1, 1.25])
+    left, right = st.columns([0.95, 1.25])
     with left:
         st.header("Inputs")
-        st.caption("Fill the fields below with client data. The score updates live as you change values.")
-        age = st.number_input("Age (years)", min_value=0, value=39, step=1, help="Client age in years.")
-        dependents = st.number_input("Number of dependents", min_value=0, value=2, step=1, help="How many dependents rely on the client.")
+        st.caption("Fill the fields below. Use realistic values; missing values reduce confidence.")
+        age = st.number_input("Age (years)", min_value=0, value=39, step=1)
+        dependents = st.number_input("Number of dependents", min_value=0, value=2, step=1)
         annual_income = st.number_input("Annual income (USD)", min_value=0, value=500000, step=STEP_INCOME, format="%d")
         annual_fixed = st.number_input("Annual fixed expenses (USD)", min_value=0, value=30000, step=STEP_FIXED, format="%d")
         annual_variable = st.number_input("Annual variable expenses (USD)", min_value=0, value=30000, step=STEP_VARIABLE, format="%d")
+        # industry is a select; CSS forces readable colors
         industry = st.selectbox("Industry stability", ["Stable", "Moderate", "Unstable"], index=1)
         expected_growth = st.number_input("Expected salary growth (annual %)", value=2.0, step=STEP_GROWTH, format="%.2f")
         investable_assets = st.number_input("Investable assets (USD)", min_value=0, value=500000, step=STEP_INVESTABLE, format="%d")
@@ -261,29 +230,30 @@ def main():
         }
 
         score = compute_risk_capacity(subscores)
-
-        # Score card
         st.markdown(f"<div class='rc-card'><div class='rc-score'>{fmt_num(score)} / 100</div></div>", unsafe_allow_html=True)
 
-        # Equity band
+        # equity guidance
         if score < 30:
-            st.warning("0–30% equities (Very conservative)")
+            st.warning("Recommended equity exposure: 0–30% (Very conservative)")
         elif 30 <= score < 50:
-            st.info("30–45% equities (Conservative)")
+            st.info("Recommended equity exposure: 30–45% (Conservative)")
         elif 50 <= score < 70:
-            st.info("45–65% equities (Moderate)")
+            st.info("Recommended equity exposure: 45–65% (Moderate)")
         elif 70 <= score < 85:
-            st.success("65–80% equities (Aggressive)")
+            st.success("Recommended equity exposure: 65–80% (Aggressive)")
         else:
-            st.success("80–100% equities (Very aggressive)")
+            st.success("Recommended equity exposure: 80–100% (Very aggressive)")
 
-        # Score breakdown (human-friendly)
-        with st.expander("Score breakdown — details for this input"):
+        # Build ranking map (weight rank: 1 = heaviest)
+        sorted_weights = sorted(WEIGHTS.items(), key=lambda kv: -kv[1])
+        rank_map = {k: i+1 for i, (k, _) in enumerate(sorted_weights)}
+
+        # Score breakdown table (human friendly)
+        with st.expander("Score breakdown — this case (readable)"):
             rows = []
-            ordered_keys = ["SLI", "Income", "Expenses", "Industry", "Age", "Growth", "Dependents"]
+            # Order rows by weight rank (heaviest first) so team sees what matters most
+            ordered_keys = [k for k, _ in sorted_weights]
             for i, key in enumerate(ordered_keys, start=1):
-                sub = subscores[key]
-                # raw inputs for a couple items:
                 raw_val = {
                     "SLI": sli_value,
                     "Income": income_ratio,
@@ -293,47 +263,75 @@ def main():
                     "Growth": expected_growth,
                     "Dependents": dependents
                 }[key]
-                explanation = zone_sentence(key, raw_val, sub)
                 rows.append({
-                    "No": i,
-                    "Component": key,
-                    "Subscore": fmt_num(sub),
+                    "Rank (by weight)": rank_map[key],
+                    "Risk factor": key,
+                    "Value (this input)": fmt_num(raw_val) if key not in ["Industry","Age","Dependents"] else str(raw_val),
+                    "Subscore": fmt_num(subscores[key]),
                     "Weight": f"{int(WEIGHTS[key])}%",
-                    "Explanation": explanation
+                    "Why this matters (this input)": zone_sentence(key, raw_val)
                 })
             df_break = pd.DataFrame(rows)
-            st.table(df_break)
+            # show as dataframe so it doesn't wrap letters vertically
+            st.dataframe(df_break, width=880, height=240)
 
-        # Sensitivity panel + user-friendly explanation
-        with st.expander("Sensitivity scenarios (what & why)"):
-            st.write("Sensitivity scenarios show how the overall score moves if income or investable assets change by ±20%. This tests whether the recommendation is robust to realistic shocks.")
+        # Sensitivity panel explanation + buttons
+        with st.expander("Sensitivity scenarios (what they do & why)"):
+            st.write("These scenarios demonstrate how the final risk score moves if key cushions shift by realistic shocks.")
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("Income -20%"):
-                    new_income = annual_income * 0.8
-                    new_income_ratio = new_income / max(1.0, (annual_fixed + annual_variable))
-                    subs2 = subscores.copy()
-                    subs2["Income"] = map_income_ratio(new_income_ratio)
+                    new_income_ratio = (annual_income * 0.8) / max(1.0, (annual_fixed + annual_variable))
+                    subs2 = subscores.copy(); subs2["Income"] = map_income_ratio(new_income_ratio)
                     st.write("Score with Income -20%:", fmt_num(compute_risk_capacity(subs2)))
                 if st.button("Income +20%"):
-                    new_income = annual_income * 1.2
-                    new_income_ratio = new_income / max(1.0, (annual_fixed + annual_variable))
-                    subs2 = subscores.copy()
-                    subs2["Income"] = map_income_ratio(new_income_ratio)
+                    new_income_ratio = (annual_income * 1.2) / max(1.0, (annual_fixed + annual_variable))
+                    subs2 = subscores.copy(); subs2["Income"] = map_income_ratio(new_income_ratio)
                     st.write("Score with Income +20%:", fmt_num(compute_risk_capacity(subs2)))
             with col2:
                 if st.button("Assets -20%"):
-                    new_assets = investable_assets * 0.8
-                    sli2 = new_assets / max(1.0, annual_withdrawals)
-                    subs2 = subscores.copy()
-                    subs2["SLI"] = map_sli(sli2)
+                    sli2 = (investable_assets * 0.8) / max(1.0, annual_withdrawals)
+                    subs2 = subscores.copy(); subs2["SLI"] = map_sli(sli2)
                     st.write("Score with Assets -20%:", fmt_num(compute_risk_capacity(subs2)))
                 if st.button("Assets +20%"):
-                    new_assets = investable_assets * 1.2
-                    sli2 = new_assets / max(1.0, annual_withdrawals)
-                    subs2 = subscores.copy()
-                    subs2["SLI"] = map_sli(sli2)
+                    sli2 = (investable_assets * 1.2) / max(1.0, annual_withdrawals)
+                    subs2 = subscores.copy(); subs2["SLI"] = map_sli(sli2)
                     st.write("Score with Assets +20%:", fmt_num(compute_risk_capacity(subs2)))
+
+        # Methodology short + long
+        with st.expander("Methodology — short (what this does)"):
+            st.write("We map core cushions (liquidity, income vs expenses, emergency months), plus demographic anchors (age, dependents, industry) and expected salary growth into normalized subscores. Those subscores are combined with transparent weights into a 0–100 objective Risk Capacity score. The result is meant to separate what the client *can* afford financially from what they *prefer* psychologically.")
+        with st.expander("Methodology — long (detailed ranges & why)"):
+            st.markdown("**SLI — Savings Longevity Index (investable assets / annual withdrawals)**")
+            st.write("- ≤1 year → subscore ≈ 0 : no cushion; extremely fragile to withdrawals.")
+            st.write("- 1–5 years → subscore maps 1 → 40 : low cushion; needs conservative posture.")
+            st.write("- 5–20 years → subscore maps 40 → 80 : moderate cushion; supports some growth risk.")
+            st.write("- >20 years → subscore maps 80 → 100 : strong cushion; can tolerate higher allocation.")
+            st.markdown("**Income ratio — Income ÷ (fixed + variable expenses)**")
+            st.write("- ≤1 : income does not cover expenses — forced selling risk (low subscore).")
+            st.write("- 1–1.5 : modest cover (low–moderate).")
+            st.write("- 1.5–2.5 : comfortable cover (moderate–high).")
+            st.write("- >2.5 : high cover (high subscore).")
+            st.markdown("**Emergency months — investable assets / monthly expenses**")
+            st.write("- <1 month: very weak short-term buffer.")
+            st.write("- 1–3 months: minimal coverage.")
+            st.write("- 3–6 months: healthy buffer.")
+            st.write("- >6 months: strong buffer.")
+            st.markdown("**Industry stability**")
+            st.write("- Stable → high subscore (less job/income risk).")
+            st.write("- Moderate → middle subscore.")
+            st.write("- Unstable → lower subscore (higher income disruption risk).")
+            st.markdown("**Age**")
+            st.write("- Younger investors → higher subscore for capacity (longer recovery horizon).")
+            st.write("- Older investors → lower subscore (shorter time to recover from drawdowns).")
+            st.markdown("**Expected salary growth**")
+            st.write("- Negative/low growth → lower subscore (less future capacity).")
+            st.write("- Higher growth → higher subscore (more ability to save later).")
+            st.markdown("**Dependents**")
+            st.write("- More dependents → lower subscore (more obligations reduce capacity).")
+            st.markdown("**Weighting rationale (summary)**")
+            st.write("- We give highest weight to liquidity and income because empirical withdrawal & lifecycle theory show these drive forced selling risk. Age & industry are next because they determine recovery time and income stability. Growth and dependents are smaller but still meaningful.")
+            st.write("If you need a citation-style justification for each weight to include in the midterm report, I can generate 1–2 short evidence pointers for each weight (e.g., lifecycle investing theory, safe withdrawal research).")
 
         # CSV download
         df_out = pd.DataFrame([{
@@ -351,13 +349,13 @@ def main():
         csv = df_out.to_csv(index=False)
         st.download_button("Download inputs & result (CSV)", csv, file_name="risk_capacity_result.csv", mime="text/csv")
 
-        # Methodology (concise)
-        with st.expander("Methodology — short"):
-            st.write("This tool maps liquidity (SLI), income vs expenses, emergency cushion, industry stability, age, expected salary growth, and dependents into normalized subscores, then combines them with a transparent weighted average to produce an objective risk capacity (0–100). We prioritize liquidity and income because those most directly determine whether the client can survive short-term drawdowns without forced selling.")
+        # Legal disclaimer (clear, short)
+        with st.expander("Legal disclaimer (must read)"):
+            st.write("This tool provides educational information only and is not financial or investment advice. Nothing on this site constitutes an offer or solicitation to buy or sell securities. Always consult a licensed financial professional before acting on information from this tool. We accept no liability for investment decisions made based on outputs from this calculator.")
 
-    # footer (clearer)
+    # footer: concise purpose
     st.markdown("---")
-    st.write("Purpose: provide an objective, explainable estimate of how much financial risk a client can afford. Use this alongside behavioral preference and your advisor judgment when choosing asset allocation.")
+    st.write("Purpose: Produce an objective, explainable estimate of a client's financial risk capacity. Use it alongside behavioral preference and professional judgment.")
 
 if __name__ == "__main__":
     main()
