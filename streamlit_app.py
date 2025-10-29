@@ -1,36 +1,38 @@
 """
-app.py — Version B (Polished)
-Polished Streamlit UI implementing the deterministic Risk Capacity score (0–100)
-per the exact specifications provided.
-
+app.py — Version B (Polished) — fixed
+ - Always auto-recomputes on input change (no hashing/recalc guard)
+ - Fixed step sizes (investable_assets = 2,500 step)
+ - Improved CSS for readable text and tasteful green accent
+ - Small defensive checks, clearer mapping caps
 Run with:
     streamlit run app.py
-
-Mapping functions are top-level and have docstrings to support unit tests.
 """
 
 from typing import Dict
-import hashlib
 import streamlit as st
 import pandas as pd
+
+# -----------------------
+# Constants & limits
+# -----------------------
+SLI_HIGH_CAP = 200.0
+INCOME_R_MAX = 10.0
+EMERGENCY_MONTHS_MAX = 24.0
+
+# Step config (change these to taste)
+STEP_INVESTABLE = 2500
+STEP_INCOME = 1000
+STEP_FIXED = 500
+STEP_VARIABLE = 500
+STEP_WITHDRAW = 100
+STEP_GROWTH = 0.1
 
 # -----------------------
 # Exact mapping functions (spec)
 # -----------------------
 
 def map_sli(sli: float) -> float:
-    """
-    SLI mapping.
-    sli = investable_assets / max(1, annual_withdrawals)
-
-    Behavior (exact):
-    - if sli <= 1: return 0
-    - 1 < sli <= 5: map linearly to 1..40
-    - 5 < sli <= 20: map linearly to 40..80
-    - sli > 20: map to 80..100 (piecewise linear):
-        - 20 < sli <= 50: 80..95
-        - 50 < sli: 95..100 (caps at 100)
-    """
+    """See docstring in original; uses SLI_HIGH_CAP to cap extreme values."""
     if sli <= 1.0:
         return 0.0
     if 1.0 < sli <= 5.0:
@@ -40,21 +42,13 @@ def map_sli(sli: float) -> float:
     if 20.0 < sli <= 50.0:
         return 80.0 + (sli - 20.0) / (50.0 - 20.0) * (95.0 - 80.0)
     if sli > 50.0:
-        mapped = 95.0 + (min(sli, 200.0) - 50.0) / (200.0 - 50.0) * (100.0 - 95.0)
+        mapped = 95.0 + (min(sli, SLI_HIGH_CAP) - 50.0) / (SLI_HIGH_CAP - 50.0) * (100.0 - 95.0)
         return min(mapped, 100.0)
     return 0.0
 
 
 def map_income_ratio(r: float) -> float:
-    """
-    Income ratio mapping.
-    r = income / max(1, fixed_expenses + variable_expenses)
-
-    - if r <= 1: return 10
-    - 1 < r <= 1.5: linear 10 → 40
-    - 1.5 < r <= 2.5: linear 40 → 75
-    - r > 2.5: linear 75 → 100 (cap)
-    """
+    """Income mapping with INCOME_R_MAX cap to avoid runaway extrapolation."""
     if r <= 1.0:
         return 10.0
     if 1.0 < r <= 1.5:
@@ -62,45 +56,28 @@ def map_income_ratio(r: float) -> float:
     if 1.5 < r <= 2.5:
         return 40.0 + (r - 1.5) / (2.5 - 1.5) * (75.0 - 40.0)
     # r > 2.5
-    mapped = 75.0 + (r - 2.5) / (5.0 - 2.5) * (100.0 - 75.0)
+    mapped = 75.0 + (min(r, INCOME_R_MAX) - 2.5) / (INCOME_R_MAX - 2.5) * (100.0 - 75.0)
     return min(mapped, 100.0)
 
 
 def map_emergency_months(months: float) -> float:
-    """
-    Emergency months mapping.
-    months = investable_assets / max(1, monthly_expenses)
-
-    - months <= 1 -> 5
-    - 1 < months <= 3 -> linear 20 → 40
-    - 3 < months <= 6 -> linear 40 → 70
-    - months > 6 -> linear 70 → 100 (cap)
-    """
+    """Emergency months mapping with EMERGENCY_MONTHS_MAX cap."""
     if months <= 1.0:
         return 5.0
     if 1.0 < months <= 3.0:
         return 20.0 + (months - 1.0) / (3.0 - 1.0) * (40.0 - 20.0)
     if 3.0 < months <= 6.0:
         return 40.0 + (months - 3.0) / (6.0 - 3.0) * (70.0 - 40.0)
-    mapped = 70.0 + (months - 6.0) / (24.0 - 6.0) * (100.0 - 70.0)
+    mapped = 70.0 + (min(months, EMERGENCY_MONTHS_MAX) - 6.0) / (EMERGENCY_MONTHS_MAX - 6.0) * (100.0 - 70.0)
     return min(mapped, 100.0)
 
 
 def map_industry(s: str) -> float:
-    """Industry mapping: 'Stable'->90, 'Moderate'->60, 'Unstable'->25"""
     m = {"Stable": 90.0, "Moderate": 60.0, "Unstable": 25.0}
     return float(m.get(s, 60.0))
 
 
 def map_age(age: int) -> float:
-    """
-    Age mapping:
-    - age <= 30 -> 90
-    - 31 <= age <= 40 -> 75
-    - 41 <= age <= 55 -> 50
-    - 56 <= age <= 65 -> 30
-    - age > 65 -> 10
-    """
     if age <= 30:
         return 90.0
     if 31 <= age <= 40:
@@ -113,24 +90,17 @@ def map_age(age: int) -> float:
 
 
 def map_growth(g: float) -> float:
-    """
-    Growth mapping:
-    - g < 0 -> 10
-    - 0 <= g <= 2 -> 30
-    - 2 < g <= 5 -> 60
-    - g > 5 -> 85
-    """
+    # boundaries chosen to be non-overlapping
     if g < 0.0:
         return 10.0
-    if 0.0 <= g <= 2.0:
+    if g < 2.0:   # 0.0 <= g < 2.0
         return 30.0
-    if 2.0 < g <= 5.0:
+    if g < 5.0:   # 2.0 <= g < 5.0
         return 60.0
     return 85.0
 
 
 def map_dependents(d: int) -> float:
-    """Dependents mapping: 0->90,1->70,2->50,3->30,4+->15"""
     if d == 0:
         return 90.0
     if d == 1:
@@ -157,24 +127,20 @@ WEIGHTS = {
 
 
 def compute_risk_capacity(subscores: Dict[str, float]) -> float:
-    """
-    Compute weighted average score:
-    sum(weight * subscore) / 100
-    Clamp 0-100 and round to 1 decimal place.
-    """
-    total = 0.0
-    for k, w in WEIGHTS.items():
-        total += w * subscores[k]
+    # defensive check
+    missing = [k for k in WEIGHTS.keys() if k not in subscores]
+    if missing:
+        raise ValueError(f"Missing subscores: {missing}")
+    total = sum(WEIGHTS[k] * float(subscores[k]) for k in WEIGHTS.keys())
     score = total / 100.0
-    score = max(0.0, min(100.0, score))
-    return round(score, 1)
+    return round(max(0.0, min(100.0, score)), 1)
 
 
 # -----------------------
 # UI (polished)
 # -----------------------
 METHODOLOGY = (
-    " We compute a transparent Risk Capacity score (0–100) by mapping core financial cushions "
+    "We compute a transparent Risk Capacity score (0–100) by mapping core financial cushions "
     "(investable assets, income and expenses) and demographic anchors (age, dependents, industry) "
     "to normalized subscores, then combining them via a defensible weighted average. We prioritize "
     "liquidity and income because empirical lifecycle and withdrawal theory show they most powerfully "
@@ -182,16 +148,6 @@ METHODOLOGY = (
     "estimated inputs. Future work may apply simple ML to calibrate factor weights using historical "
     "outcomes; the rule-based system remains the primary, explainable driver."
 )
-
-def format_metric_color(score: float) -> str:
-    """Return color string for st.metric styling guidance (not enforced by Streamlit)."""
-    if score < 30:
-        return "red"
-    if score < 50:
-        return "orange"
-    if score < 70:
-        return "yellow"
-    return "green"
 
 
 def main():
@@ -206,22 +162,19 @@ def main():
         st.header("Inputs")
         st.caption("Provide client financials and demographics. Negative values are coerced to 0.")
 
-        # Use integer inputs for USD values so cents are not shown.
+        # Defaults & steps tuned per request
         age = st.number_input("Age (years)", min_value=0, value=39, step=1, help="Client age in years (int).")
         dependents = st.number_input("Number of dependents", min_value=0, value=2, step=1, help="Count of dependents (int).")
-        annual_income = st.number_input("Annual income (USD)", min_value=0, value=500000, step=500, format="%d", help="Gross annual income. No cents shown.")
-        annual_fixed = st.number_input("Annual fixed expenses (USD)", min_value=0, value=30000, step=500, format="%d", help="Essential fixed expenses per year. No cents shown.")
-        annual_variable = st.number_input("Annual variable expenses (USD)", min_value=0, value=30000, step=500, format="%d", help="Variable expenses per year. No cents shown.")
+        annual_income = st.number_input("Annual income (USD)", min_value=0, value=500000, step=STEP_INCOME, format="%d", help="Gross annual income.")
+        annual_fixed = st.number_input("Annual fixed expenses (USD)", min_value=0, value=30000, step=STEP_FIXED, format="%d", help="Essential fixed expenses per year.")
+        annual_variable = st.number_input("Annual variable expenses (USD)", min_value=0, value=30000, step=STEP_VARIABLE, format="%d", help="Variable expenses per year.")
         industry = st.selectbox("Industry stability", ["Stable", "Moderate", "Unstable"], index=1, help="Select industry stability (dropdown).")
-        # Growth step increased to 0.1 for coarser increments (per request)
-        expected_growth = st.number_input("Expected salary growth (annual %)", value=2.0, step=0.1, format="%.1f", help="Expected yearly salary growth percentage (float).")
-        investable_assets = st.number_input("Investable assets (USD)", min_value=0, value=500000, step=10000, format="%d", help="Liquid investable assets. Step 10,000.")
-        annual_withdrawals = st.number_input("Annual withdrawals (USD)", min_value=0, value=10000, step=100, format="%d", help="Planned yearly withdrawals from portfolio. Step 100.")
+        expected_growth = st.number_input("Expected salary growth (annual %)", value=2.0, step=STEP_GROWTH, format="%.2f", help="Expected yearly salary growth percentage (float).")
+        investable_assets = st.number_input("Investable assets (USD)", min_value=0, value=500000, step=STEP_INVESTABLE, format="%d", help=f"Liquid investable assets. Step {STEP_INVESTABLE}.")
+        annual_withdrawals = st.number_input("Annual withdrawals (USD)", min_value=0, value=10000, step=STEP_WITHDRAW, format="%d", help="Planned yearly withdrawals from portfolio.")
 
-        # Input validation notices
         if annual_withdrawals == 0:
             st.warning("Annual withdrawals = 0. Using 1 as safe fallback for SLI calculation; consider entering expected withdrawals.")
-        # No negative possible because min_value set to 0 above.
 
     with right:
         st.header("Results")
@@ -241,31 +194,38 @@ def main():
             "Dependents": map_dependents(int(dependents)),
         }
 
-        # Recalculation control: detect input changes using a simple hash of inputs
-        inputs_tuple = (int(age), int(dependents), int(annual_income), int(annual_fixed), int(annual_variable), industry, float(expected_growth), int(investable_assets), int(annual_withdrawals))
-        inputs_hash = hashlib.sha256(str(inputs_tuple).encode()).hexdigest()
-        last_hash = st.session_state.get("inputs_hash", None)
-        recalc_pressed = st.button("Recalculate")
+        # Always compute (no hash/recalc guard) — Streamlit reruns on input change & file save
+        score = compute_risk_capacity(subscores)
 
-        # Recompute if inputs changed since last render or if the user explicitly pressed Recalculate
-        need_recompute = (last_hash != inputs_hash) or recalc_pressed
-        if need_recompute:
-            st.session_state["inputs_hash"] = inputs_hash
-            score = compute_risk_capacity(subscores)
-            st.session_state["last_score"] = score
-            st.success("Score updated")
-        else:
-            score = st.session_state.get("last_score", compute_risk_capacity(subscores))
-
-        # Apply a small stylesheet for requested color scheme (gray background, green accent)
+        # Improved CSS + readable text + tasteful green accent
         st.markdown(
-            """
+            f"""
             <style>
-            .reportview-container {background: #f4f4f4}
-            .stApp {background: #f4f4f4}
-            .rc-score {font-size:40px; font-weight:700; color: #129742}
-            .rc-sub {color: #333333}
-            .rc-card {background: white; padding: 12px; border-radius: 8px}
+            :root {{
+                --accent: #129742;
+                --bg: #f7faf9;
+                --card: #ffffff;
+                --text: #111827;
+            }}
+            html, body, .stApp {{
+                background: var(--bg) !important;
+                color: var(--text) !important;
+            }}
+            .rc-card {{
+                background: var(--card);
+                padding: 16px;
+                border-radius: 12px;
+                box-shadow: 0 6px 18px rgba(15,23,42,0.06);
+                color: var(--text) !important;
+            }}
+            .rc-score {{ font-size:38px; font-weight:700; color: var(--accent); }}
+            .stButton>button {{
+                background: var(--accent) !important;
+                color: white !important;
+                border-radius: 8px !important;
+                padding: 8px 12px !important;
+            }}
+            .stTable td, .stTable th {{ color: var(--text) !important; }}
             </style>
             """,
             unsafe_allow_html=True,
@@ -274,19 +234,22 @@ def main():
         # Large colored score display using the requested green
         st.markdown(f"<div class='rc-card'><div class='rc-score'>{score} / 100</div></div>", unsafe_allow_html=True)
 
-        # Equity band mapping
+        # Equity band mapping + banner
         if score < 30:
             band = "0–30% equities (Very conservative)"
+            st.warning(band)
         elif 30 <= score < 50:
             band = "30–45% equities (Conservative)"
+            st.info(band)
         elif 50 <= score < 70:
             band = "45–65% equities (Moderate)"
+            st.info(band)
         elif 70 <= score < 85:
             band = "65–80% equities (Aggressive)"
+            st.success(band)
         else:
             band = "80–100% equities (Very aggressive)"
-        st.subheader("Recommended equity exposure")
-        st.info(band)
+            st.success(band)
 
         # Score breakdown: clean table presentation
         with st.expander("Score breakdown (subscores, mapping, weights)"):
@@ -301,16 +264,15 @@ def main():
             }
             rows = []
             for k, v in subscores.items():
-                rows.append({"Component": k, "Subscore": round(v,1), "Weight": int(WEIGHTS[k]), "Mapping": mapping_text.get(k, "")})
+                rows.append({"Component": k, "Subscore": round(v, 1), "Weight": int(WEIGHTS[k]), "Mapping": mapping_text.get(k, "")})
             df_break = pd.DataFrame(rows)
             st.table(df_break)
             st.markdown("Mapping logic shown above; exact piecewise rules are implemented in the mapping functions.")
 
-        # Assumptions & Confidence
-        with st.expander("Assumptions & Confidence"):
-            st.write("Inputs provided by user vs defaults are shown in the left panel.")
-            st.write("Sensitivity: rapid ±20% scenarios for income and assets are below.")
-            st.write("Confidence note: numeric inputs given by the user are considered high-confidence; any 0 or missing values are flagged.")
+        # Small live captions for clarity
+        st.caption(f"SLI (years) = {round(sli_value,2)} → subscore {round(subscores['SLI'],1)}")
+        st.caption(f"Income ratio = {round(income_ratio,2)} → subscore {round(subscores['Income'],1)}")
+        st.caption(f"Emergency months = {round(months,1)} → subscore {round(subscores['Expenses'],1)}")
 
         # Sensitivity panel: sliders/buttons for ±20% scenarios
         with st.container():
@@ -359,11 +321,11 @@ def main():
         csv = df.to_csv(index=False)
         st.download_button("Download inputs & result (CSV)", csv, file_name="risk_capacity_result.csv", mime="text/csv")
 
-        # Methodology expander (required exact paragraph)
+        # Methodology expander
         with st.expander("Methodology (verbatim)"):
             st.write(METHODOLOGY)
 
-        # Weights explanation expander (weights_explain.md content)
+        # Weights explanation expander
         with st.expander("Weights explanation"):
             st.write("- SLI (25): Liquidity buffer and withdrawal sustainability; follows lifecycle and safe-withdrawal logic.")
             st.write("- Income (20): Human capital and income stability reduce forced selling risk.")
@@ -373,19 +335,14 @@ def main():
             st.write("- Growth (8): Expected earnings growth affects future capacity.")
             st.write("- Dependents (8): Obligations reduce discretionary capacity.")
 
-        # Share / Deploy (exact commands)
+        # Share / Deploy guidance
         with st.expander("Share / Deploy (Git & Streamlit commands)"):
-            st.code("git add app.py requirements.txt README.md weights_explain.md\n"
-                    "git commit -m \"Add Risk Capacity app (Version B)\"\n"
+            st.code("git add app.py requirements.txt README.md\n"
+                    "git commit -m \"Update app: UX, steps, styling\"\n"
                     "git push origin main\n")
-            st.write("Then in Streamlit Community Cloud: New app → connect GitHub repo → branch 'main' → file 'app.py' → Deploy")
+            st.write("Then go to Streamlit Community Cloud → connect repo → select branch 'main' and file 'app.py' → Deploy. Pushing commits will auto-redeploy.")
 
-        # Copy methodology to clipboard (best-effort: provide text area and copy button)
-        st.subheader("Copy methodology")
-        st.code(METHODOLOGY)
-        # Note: direct clipboard copy isn't available server-side; instruct user to copy.
-
-    # Footer small note
+    # Footer
     st.markdown("---")
     st.write("Short 'Why this matters': Objective capacity separates what client *can* tolerate financially from what they *prefer* to tolerate subjectively.")
 
