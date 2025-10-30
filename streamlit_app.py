@@ -1136,65 +1136,115 @@ def main():
             unsafe_allow_html=True
         )
 
-        # Interpretation: show requirement first, then alignment
-        # requirement text
+        # Interpretation and alignment
+        # The goal of this section is to explain in plain language what the
+        # numeric requirement score means and whether the client's financial
+        # ability (capacity) is aligned with what is required to hit their goal.
+        # We present a short human message for the requirement followed by a
+        # comparison between capacity and requirement.
+
+        # Determine a short human message describing the risk requirement level.
+        # We pick three readable categories so a non expert can understand:
+        # - High: the plan needs aggressive returns to succeed
+        # - Moderate: above average returns are needed
+        # - Low: conservative or moderate investing is sufficient
         if requirement_score >= 70:
+            # Very high requirement: client needs strong returns to meet goal
             req_msg = "Requirement: High: achieving the target within the time horizon requires an aggressive return profile."
         elif requirement_score >= 45:
+            # Middle zone: some extra return is needed
             req_msg = "Requirement: Moderate: achieving the target requires above-average returns."
         else:
+            # Low requirement: the target is reasonable for conservative approaches
             req_msg = "Requirement: Low: the target is achievable with a conservative-to-moderate approach."
 
+        # Show the requirement message to the user in an info box so it stands out
         st.markdown("### Interpretation and alignment")
         st.info(req_msg)
 
-        # alignment message: capacity minus requirement
+        # Compare capacity and requirement so the user can see alignment
+        # diff = capacity_score - requirement_score
+        # Positive diff: user can take more risk than required
+        # Near zero diff: capacity and requirement are roughly aligned
+        # Negative diff: capacity is below requirement and action is needed
         diff = round(capacity_score - requirement_score, 1)
+
+        # Choose plain language messages for the three outcomes and use the
+        # appropriate Streamlit message style so the user immediately sees
+        # whether the situation is good (success), neutral (info) or worrying (warning).
         if diff >= 10:
+            # Capacity meaningfully exceeds requirement
             align_msg = f"Capacity exceeds requirement by {fmt_num(diff)} points: you have room to pursue a more aggressive plan while keeping resilience."
             st.success(align_msg)
         elif -10 <= diff < 10:
+            # Capacity roughly matches requirement
             align_msg = f"Capacity roughly matches requirement (difference {fmt_num(diff)}): proceed with a monitored plan and periodic reviews."
             st.info(align_msg)
         else:
+            # Capacity is meaningfully below requirement, suggest options
             align_msg = f"Capacity is {fmt_num(-diff)} points below requirement: this is a material mismatch. Options: increase savings, extend the time horizon, or reduce the target."
             st.warning(align_msg)
 
         # -----------------------
-        # Capacity breakdown: order by weight (1-based ranking)
+        # Capacity breakdown: explain each factor and how it contributed
+        # The table is ordered by the importance (weight) of each factor so the
+        # user sees the most important items first.
         # -----------------------
         st.markdown("### Risk Capacity: case-specific breakdown (ranked by weight)")
+
+        # Sort the WEIGHTS dictionary by value descending to get the ranking
         sorted_weights = sorted(WEIGHTS.items(), key=lambda kv: -kv[1])
         ordered_keys = [k for k, _ in sorted_weights]
+
+        # Build rows for a readable table. Each row contains:
+        # - Rank: position by importance
+        # - Risk factor: the factor name (SLI, Income, etc.)
+        # - Input value: the raw number entered or computed
+        # - Subscore: the normalized score for that factor (0-100)
+        # - Weight: the percent importance used to compute the final score
+        # - Why this matters: a short plain English sentence explaining relevance
         rows = []
         for rank, key in enumerate(ordered_keys, start=1):
+            # Look up the raw input or computed value for each factor
             raw_val = {"SLI": sli_value, "Income": income_ratio, "Expenses": months, "Industry": industry, "Age": age, "Growth": expected_growth, "Dependents": dependents}[key]
             rows.append({
                 "Rank": rank,
                 "Risk factor": key,
+                # Present input value as formatted number for readability; for categorical values use string
                 "Input value": fmt_num(raw_val) if key not in ["Industry", "Age", "Dependents"] else str(raw_val),
                 "Subscore": fmt_num(subscores[key]),
                 "Weight": f"{int(WEIGHTS[key])}%",
                 "Why this matters:": zone_sentence(key, raw_val)
             })
+
+        # Convert rows to a DataFrame for a tidy display and show it to the user
         df_cap = pd.DataFrame(rows)
         st.dataframe(df_cap, width=960, height=240)
 
         # -----------------------
-        # Requirement breakdown: similarly formatted
+        # Requirement breakdown: show the components that drive the requirement score
+        # We use the same human friendly table format so users can see which parts
+        # of their plan make the goal more or less demanding.
         # -----------------------
         st.markdown("### Risk Requirement: case-specific breakdown (ranked by weight)")
-        # requirement weight ordering used in compute_risk_requirement
+
+        # This ordering mirrors the internal weights used when computing the requirement
         req_order = [("RRR", 35), ("RealReq", 25), ("Shortfall", 25), ("DrawPressure", 15)]
         rows_r = []
         for rank, (k, w) in enumerate(req_order, start=1):
+            # Get the numeric subscore we computed earlier for display
             val = req_subscores[k]
+
+            # Create a human readable representation of the raw value that produced the subscore
+            # so the user can see the underlying number and what it refers to.
             human_val = {
                 "RRR": f"{round(rrr*100,2)}% (RRR)",
                 "RealReq": f"{round(real_req_pct,2)}% (real req)",
                 "Shortfall": f"{round(shortfall_pct,2)}% (shortfall)",
                 "DrawPressure": f"{round(draw_ratio,2)}x (drawdown ratio)"
             }[k]
+
+            # Build a row that includes a short explanation why this factor matters
             rows_r.append({
                 "Rank": rank,
                 "Requirement factor": k,
@@ -1202,35 +1252,46 @@ def main():
                 "Subscore": fmt_num(val),
                 "Weight": f"{w}%",
                 "Why this matters:": {
-                    "RRR": "Required annual growth rate to hit target in horizon.",
+                    "RRR": "Required annual growth rate to hit the target in the stated horizon.",
                     "RealReq": "After inflation: how much purchasing-power growth is needed.",
-                    "Shortfall": "Difference between required real return and expected return: a positive shortfall implies more return must be found via risk.",
-                    "DrawPressure": "Historical drawdowns relative to tolerance: higher ratios mean the plan faces severe risk in downturns."
+                    "Shortfall": "Difference between required real return and expected return. A positive shortfall means more return must be found via risk.",
+                    "DrawPressure": "Historical drawdowns relative to tolerance: higher ratios mean the plan faces more practical risk in downturns."
                 }[k]
             })
+
+        # Convert to DataFrame and show the table
         df_req = pd.DataFrame(rows_r)
         st.dataframe(df_req, width=960, height=180)
 
         # -----------------------
-        # Sensitivity: Quick shocks (button labels: no 'shock' word)
+        # Sensitivity scenarios: quick what if examples
+        # These let the user see how a few realistic changes affect the risk capacity.
+        # They are short interactive examples rather than a full sensitivity analysis.
         # -----------------------
         with st.expander("Sensitivity scenarios: quick shocks to see how score moves"):
             st.write("These scenarios show how the final risk capacity score moves if key cushions shift by realistic amounts.")
             colA, colB = st.columns(2)
             with colA:
+                # Income -20%: simulates losing some income or having lower pay
                 if st.button("Income -20%"):
                     new_income_ratio = (annual_income * 0.8) / max(1.0, (annual_fixed + annual_variable))
+                    # Copy the existing subscores and replace only the Income subscore
                     subs2 = subscores.copy(); subs2["Income"] = map_income_ratio(new_income_ratio)
                     st.write("New risk capacity:", fmt_num(compute_risk_capacity(subs2)))
+
+                # Income +20%: simulates a pay raise or bonus
                 if st.button("Income +20%"):
                     new_income_ratio = (annual_income * 1.2) / max(1.0, (annual_fixed + annual_variable))
                     subs2 = subscores.copy(); subs2["Income"] = map_income_ratio(new_income_ratio)
                     st.write("New risk capacity:", fmt_num(compute_risk_capacity(subs2)))
             with colB:
+                # Assets -20%: simulates a loss in investable assets or using savings
                 if st.button("Assets -20%"):
                     sli2 = (investable_assets * 0.8) / max(1.0, annual_withdrawals)
                     subs2 = subscores.copy(); subs2["SLI"] = map_sli(sli2)
                     st.write("New risk capacity:", fmt_num(compute_risk_capacity(subs2)))
+
+                # Assets +20%: simulates saving more or portfolio gains
                 if st.button("Assets +20%"):
                     sli2 = (investable_assets * 1.2) / max(1.0, annual_withdrawals)
                     subs2 = subscores.copy(); subs2["SLI"] = map_sli(sli2)
